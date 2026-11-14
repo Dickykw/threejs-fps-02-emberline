@@ -13,7 +13,7 @@ const portIndex = args.indexOf('--port');
 const requested = portIndex === -1 ? 8080 : Number(args[portIndex + 1]);
 const port = Number.isInteger(requested) && requested > 0 && requested < 65536 ? requested : 8080;
 
-const MIME: Record<string, string> = {
+const MIME = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
   '.mjs': 'text/javascript; charset=utf-8',
@@ -28,35 +28,27 @@ const MIME: Record<string, string> = {
 };
 
 createServer((request, response) => {
-  const url = new URL(request.url ?? '/', 'http://localhost');
-  let pathname: string;
   try {
-    pathname = decodeURIComponent(url.pathname);
+    const url = new URL(request.url ?? '/', 'http://localhost');
+    const rel = normalize(decodeURIComponent(url.pathname)).replace(/^(\.\.(\/|\\|$))+/, '');
+    const path = join(root, rel === '/' ? 'index.html' : rel);
+    if (!path.startsWith(root + sep) && path !== root) {
+      response.writeHead(403);
+      response.end('forbidden');
+      return;
+    }
+    const st = statSync(path);
+    if (!st.isFile()) {
+      response.writeHead(404);
+      response.end('not found');
+      return;
+    }
+    response.writeHead(200, { 'content-type': MIME[extname(path)] ?? 'application/octet-stream' });
+    createReadStream(path).pipe(response);
   } catch {
-    response.writeHead(400).end('bad request');
-    return;
+    response.writeHead(404);
+    response.end('not found');
   }
-  if (pathname.endsWith('/')) pathname += 'index.html';
-  const file = resolve(join(root, normalize(pathname)));
-  if (file !== root && !file.startsWith(root + sep)) {
-    response.writeHead(403).end('forbidden');
-    return;
-  }
-  let size: number;
-  try {
-    const stats = statSync(file);
-    if (!stats.isFile()) throw new Error('not a file');
-    size = stats.size;
-  } catch {
-    response.writeHead(404).end('not found');
-    return;
-  }
-  response.writeHead(200, {
-    'content-type': MIME[extname(file).toLowerCase()] ?? 'application/octet-stream',
-    'content-length': size,
-    'cache-control': 'no-store',
-  });
-  createReadStream(file).pipe(response);
-}).listen(port, '127.0.0.1', () => {
-  console.log(`game/ is on http://localhost:${port}`);
+}).listen(port, () => {
+  console.log(`serving game/ at http://localhost:${port}`);
 });

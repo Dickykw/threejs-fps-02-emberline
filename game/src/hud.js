@@ -1,194 +1,166 @@
-// The DOM HUD: crosshair, hit marker, health, ammo, money, timer, score, alive dots,
-// kill feed, bomb status and the one overlay panel (start, paused, buy, round, match,
-// dead). It never touches the simulation; main.js pushes numbers in and reads the play
-// and buy callbacks out. Every setter caches its last value and skips a redundant DOM
-// write.
-const COPY = {
-  start: {
-    title: 'EMBERLINE',
-    copy: 'Foundry Yard. Plant the bomb at A or B, or eliminate Slate. First to 5 rounds takes the match.',
-    action: 'Click to play',
-  },
-  paused: {
-    title: 'EMBERLINE',
-    copy: 'Paused. Click to resume.',
-    action: 'Click to resume',
-  },
-};
-
+// HUD: every DOM readout — crosshair, health, ammo, money, timer, score, alive
+// dots, kill feed, bomb status, plant bar, buy menu and overlays. All lookups are
+// guarded, so a missing element is skipped instead of throwing.
 export function createHud() {
-  const overlay = document.getElementById('overlay');
-  const title = document.getElementById('overlay-title');
-  const copy = document.getElementById('overlay-copy');
-  const play = document.getElementById('play');
-  const buyList = document.getElementById('buy-list');
-  const crosshair = document.getElementById('crosshair');
-  const hitmarker = document.getElementById('hitmarker');
-  const damageFlash = document.getElementById('damage-flash');
-  const healthFill = document.getElementById('health-fill');
-  const healthValue = document.getElementById('health-value');
-  const armorValue = document.getElementById('armor-value');
-  const ammo = document.getElementById('ammo');
-  const ammoMag = document.getElementById('ammo-mag');
-  const ammoReserve = document.getElementById('ammo-reserve');
-  const weaponName = document.getElementById('weapon-name');
-  const moneyValue = document.getElementById('money-value');
-  const timerValue = document.getElementById('timer-value');
-  const scoreEmber = document.getElementById('score-ember');
-  const scoreSlate = document.getElementById('score-slate');
-  const roundLabel = document.getElementById('round-label');
-  const aliveEmber = document.getElementById('alive-ember');
-  const aliveSlate = document.getElementById('alive-slate');
-  const killfeed = document.getElementById('killfeed');
-  const bombStatus = document.getElementById('bomb-status');
-  const message = document.getElementById('message');
-  const plantBar = document.getElementById('plant-bar');
-  const plantFill = document.getElementById('plant-fill');
+  const $ = (id) => document.getElementById(id);
+  const els = {
+    hud: $('hud'),
+    crosshair: $('crosshair'),
+    hitmarker: $('hitmarker'),
+    hpFill: $('hp-fill'),
+    hpNum: $('hp-num'),
+    armorNum: $('armor-num'),
+    ammoMag: $('ammo-mag'),
+    ammoRes: $('ammo-res'),
+    weaponName: $('weapon-name'),
+    money: $('money'),
+    timer: $('timer'),
+    scoreEmber: $('score-ember'),
+    scoreSlate: $('score-slate'),
+    roundNum: $('round-num'),
+    aliveEmber: $('alive-ember'),
+    aliveSlate: $('alive-slate'),
+    killfeed: $('killfeed'),
+    bombStatus: $('bomb-status'),
+    plantBar: $('plant-bar'),
+    plantFill: $('plant-fill'),
+    buyMenu: $('buy-menu'),
+    buyItems: $('buy-items'),
+    buyMoney: $('buy-money'),
+    overlay: $('overlay'),
+    overlayTitle: $('overlay-title'),
+    overlayText: $('overlay-text'),
+    overlayBtn: $('overlay-btn'),
+    banner: $('banner'),
+    bannerText: $('banner-text'),
+    bannerSub: $('banner-sub'),
+  };
+  let hitT = 0;
+  let bannerT = 0;
 
-  let hitTimer = 0;
-  let messageTimer = 0;
-  let damageTimer = 0;
-  const last = { mag: -1, reserve: -1, hp: -1, armor: -1, money: -1, timer: '', score: '', alive: '', weapon: '', bomb: '' };
-
-  function dots(element, alive, total, cls) {
-    const key = `${alive}/${total}`;
-    if (last[cls] === key) return;
-    last[cls] = key;
+  function dots(el, count, total, color) {
+    if (!el) return;
     let html = '';
-    for (let i = 0; i < total; i += 1) html += `<i class="${i < alive ? 'on' : ''}"></i>`;
-    element.innerHTML = html;
+    for (let i = 0; i < total; i++) {
+      html += `<span class="dot${i < count ? ' on' : ''}" style="${i < count ? `background:${color}` : ''}"></span>`;
+    }
+    el.innerHTML = html;
+  }
+
+  function fmtTime(s) {
+    const v = Math.max(0, Math.ceil(s));
+    return `${Math.floor(v / 60)}:${String(v % 60).padStart(2, '0')}`;
   }
 
   return {
-    setAmmo(mag, reserve, name) {
-      if (mag === last.mag && reserve === last.reserve && name === last.weapon) return;
-      last.mag = mag;
-      last.reserve = reserve;
-      last.weapon = name;
-      ammoMag.textContent = String(mag);
-      ammoReserve.textContent = `/ ${reserve}`;
-      weaponName.textContent = name;
-      ammo.classList.toggle('empty', mag === 0);
+    update(s) {
+      if (els.hpFill) els.hpFill.style.width = `${Math.max(0, s.hp)}%`;
+      if (els.hpNum) els.hpNum.textContent = String(Math.max(0, Math.ceil(s.hp)));
+      if (els.armorNum) els.armorNum.textContent = s.armor > 0 ? `+${Math.ceil(s.armor)}` : '';
+      if (els.ammoMag) els.ammoMag.textContent = s.mag == null ? '—' : String(s.mag);
+      if (els.ammoRes) els.ammoRes.textContent = s.reserve == null ? '' : `/ ${s.reserve}`;
+      if (els.weaponName) els.weaponName.textContent = s.weaponName || '';
+      if (els.money) els.money.textContent = `$${s.money}`;
+      if (els.timer) {
+        els.timer.textContent = fmtTime(s.timer);
+        els.timer.classList.toggle('low', s.timer <= 10 && s.phase === 'playing');
+      }
+      if (els.scoreEmber) els.scoreEmber.textContent = String(s.scoreEmber);
+      if (els.scoreSlate) els.scoreSlate.textContent = String(s.scoreSlate);
+      if (els.roundNum) els.roundNum.textContent = `ROUND ${s.round}`;
+      dots(els.aliveEmber, s.aliveEmber, 3, '#35c4b5');
+      dots(els.aliveSlate, s.aliveSlate, 4, '#ff5a4a');
+      if (els.bombStatus) {
+        els.bombStatus.textContent = s.bombText || '';
+        els.bombStatus.classList.toggle('hot', !!s.bombText);
+      }
+      if (els.crosshair) {
+        const gap = 6 + (s.spread || 0) * 260 + (s.moving ? 4 : 0);
+        els.crosshair.style.setProperty('--gap', `${gap.toFixed(1)}px`);
+        els.crosshair.classList.toggle('hidden', s.phase !== 'playing' && s.phase !== 'buy');
+      }
+      if (hitT > 0) {
+        hitT -= 1 / 60;
+        if (hitT <= 0 && els.hitmarker) els.hitmarker.classList.remove('show');
+      }
+      if (bannerT > 0) {
+        bannerT -= 1 / 60;
+        if (bannerT <= 0 && els.banner) els.banner.classList.remove('show');
+      }
     },
-    setHealth(hp, armor) {
-      if (hp === last.hp && armor === last.armor) return;
-      last.hp = hp;
-      last.armor = armor;
-      healthFill.style.width = `${Math.max(0, hp)}%`;
-      healthValue.textContent = String(Math.ceil(hp));
-      armorValue.textContent = armor > 0 ? `+${Math.ceil(armor)}` : '';
+    showHitmarker(kill) {
+      if (!els.hitmarker) return;
+      els.hitmarker.classList.add('show');
+      els.hitmarker.classList.toggle('kill', !!kill);
+      hitT = kill ? 0.4 : 0.18;
     },
-    setMoney(value) {
-      if (value === last.money) return;
-      last.money = value;
-      moneyValue.textContent = `$${value}`;
+    addKill(text) {
+      if (!els.killfeed) return;
+      const div = document.createElement('div');
+      div.className = 'kf';
+      div.textContent = text;
+      els.killfeed.prepend(div);
+      while (els.killfeed.children.length > 5) els.killfeed.lastChild.remove();
+      setTimeout(() => div.remove(), 6000);
     },
-    setTimer(seconds, phase) {
-      const text = phase === 'buy' ? `BUY ${Math.ceil(seconds)}` : `${Math.floor(seconds / 60)}:${String(Math.floor(seconds % 60)).padStart(2, '0')}`;
-      if (text === last.timer) return;
-      last.timer = text;
-      timerValue.textContent = text;
-      timerValue.classList.toggle('urgent', phase === 'playing' && seconds <= 15);
+    showBanner(text, sub) {
+      if (!els.banner) return;
+      if (els.bannerText) els.bannerText.textContent = text;
+      if (els.bannerSub) els.bannerSub.textContent = sub || '';
+      els.banner.classList.add('show');
+      bannerT = 3;
     },
-    setScore(ember, slate, round) {
-      const text = `${ember}-${slate} R${round}`;
-      if (text === last.score) return;
-      last.score = text;
-      scoreEmber.textContent = String(ember);
-      scoreSlate.textContent = String(slate);
-      roundLabel.textContent = `ROUND ${round}`;
+    hideBanner() {
+      if (els.banner) els.banner.classList.remove('show');
+      bannerT = 0;
     },
-    setAlive(emberAlive, slateAlive) {
-      dots(aliveEmber, emberAlive, 3, 'aliveE');
-      dots(aliveSlate, slateAlive, 4, 'aliveS');
-    },
-    setCrosshairGap(px) {
-      crosshair.style.setProperty('--gap', `${px.toFixed(1)}px`);
-    },
-    hitMarker(killed, holdMs = 90) {
-      hitmarker.classList.add('on');
-      hitmarker.style.transform = killed ? 'translate(-50%, -50%) rotate(45deg) scale(1.25)' : '';
-      clearTimeout(hitTimer);
-      hitTimer = setTimeout(() => {
-        hitmarker.classList.remove('on');
-        hitmarker.style.transform = '';
-      }, holdMs);
-    },
-    damageFlash() {
-      damageFlash.classList.add('on');
-      clearTimeout(damageTimer);
-      damageTimer = setTimeout(() => damageFlash.classList.remove('on'), 220);
-    },
-    killFeed(text) {
-      const entry = document.createElement('div');
-      entry.textContent = text;
-      killfeed.prepend(entry);
-      while (killfeed.children.length > 4) killfeed.removeChild(killfeed.lastChild);
-      setTimeout(() => entry.remove(), 4500);
-    },
-    showMessage(text, holdMs = 2600) {
-      message.textContent = text;
-      message.classList.add('on');
-      clearTimeout(messageTimer);
-      messageTimer = setTimeout(() => message.classList.remove('on'), holdMs);
-    },
-    setBomb(text) {
-      if (text === last.bomb) return;
-      last.bomb = text;
-      bombStatus.textContent = text;
-      bombStatus.classList.toggle('on', text.length > 0);
-    },
-    setPlant(progress) {
-      if (progress <= 0) {
-        plantBar.hidden = true;
+    setPlant(p) {
+      if (!els.plantBar || !els.plantFill) return;
+      if (p == null) {
+        els.plantBar.classList.add('hidden');
         return;
       }
-      plantBar.hidden = false;
-      plantFill.style.width = `${Math.min(100, progress * 100)}%`;
+      els.plantBar.classList.remove('hidden');
+      els.plantFill.style.width = `${Math.round(p * 100)}%`;
     },
-    showOverlay(mode, data) {
-      if (mode === 'buy') {
-        title.textContent = `Buy phase — Round ${data.round}`;
-        copy.textContent = `Spend your $${data.money} before the round starts. Keys 1–4 buy, B closes.`;
-        play.textContent = 'Deploy';
-      } else if (mode === 'round') {
-        title.textContent = data.winner === 'ember' ? 'Round won' : 'Round lost';
-        copy.textContent = `${data.reason}. Ember ${data.ember} — ${data.slate} Slate.`;
-        play.textContent = data.matchOver ? 'See results' : 'Next round';
-      } else if (mode === 'match') {
-        title.textContent = data.winner === 'ember' ? 'Match won' : data.winner === 'draw' ? 'Match drawn' : 'Match lost';
-        copy.textContent = `Final: Ember ${data.ember} — ${data.slate} Slate.`;
-        play.textContent = 'Play again';
-      } else if (mode === 'dead') {
-        title.textContent = 'You are down';
-        copy.textContent = 'Your squad fights on. Next round starts soon.';
-        play.textContent = 'Wait for next round';
-      } else {
-        const text = COPY[mode] || COPY.start;
-        title.textContent = text.title;
-        copy.textContent = text.copy;
-        play.textContent = text.action;
+    // Buy menu: items are {id, name, price, owned, desc}; onBuy(id) runs on click.
+    renderBuy(items, money, onBuy) {
+      if (!els.buyMenu) return;
+      if (els.buyMoney) els.buyMoney.textContent = `$${money}`;
+      if (!els.buyItems) return;
+      els.buyItems.innerHTML = '';
+      items.forEach((item, i) => {
+        const b = document.createElement('button');
+        b.className = 'buy-item';
+        const afford = money >= item.price || item.owned;
+        b.disabled = !afford;
+        b.innerHTML = `<span class="buy-key">${i + 1}</span><span class="buy-name">${item.name}</span><span class="buy-desc">${item.desc}</span><span class="buy-price">${item.owned ? 'OWNED' : '$' + item.price}</span>`;
+        b.addEventListener('click', () => onBuy(item.id));
+        els.buyItems.appendChild(b);
+      });
+    },
+    showBuy(show) {
+      if (els.buyMenu) els.buyMenu.classList.toggle('hidden', !show);
+    },
+    showOverlay(title, text, btnText, onBtn) {
+      if (!els.overlay) return;
+      if (els.overlayTitle) els.overlayTitle.textContent = title;
+      if (els.overlayText) els.overlayText.textContent = text;
+      const btn = els.overlayBtn;
+      if (btn) {
+        btn.textContent = btnText || 'Click to play';
+        btn.onclick = () => onBtn?.();
       }
-      overlay.hidden = false;
-      play.focus();
+      els.overlay.classList.remove('hidden');
     },
     hideOverlay() {
-      overlay.hidden = true;
+      if (els.overlay) els.overlay.classList.add('hidden');
     },
-    onPlay(handler) {
-      play.addEventListener('click', handler);
-    },
-    renderBuy(items, money, onBuy) {
-      buyList.innerHTML = '';
-      for (const item of items) {
-        const button = document.createElement('button');
-        button.type = 'button';
-        button.className = 'buy-item';
-        button.disabled = item.owned || money < item.price;
-        button.innerHTML = `<b>${item.key}</b> ${item.label} <span>$${item.price}</span>${item.owned ? ' — owned' : ''}`;
-        button.addEventListener('click', () => onBuy(item.id));
-        buyList.appendChild(button);
-      }
+    setOverlayButton(btnText, onBtn) {
+      const btn = els.overlayBtn;
+      if (!btn) return;
+      btn.textContent = btnText;
+      btn.onclick = () => onBtn?.();
     },
   };
 }
