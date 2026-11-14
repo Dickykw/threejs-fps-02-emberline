@@ -464,6 +464,13 @@ let frozen = false;
 function loop(now) {
   if (frozen) return;
   requestAnimationFrame(loop);
+  if (shotMode) {
+    // Screenshot mode: render the frozen frame every tick, never advance the sim.
+    render();
+    updateHud();
+    if (!window.__shotReady) window.__shotReady = true;
+    return;
+  }
   const dt = Math.min(0.1, (now - last) / 1000);
   last = now;
   acc += dt;
@@ -486,8 +493,7 @@ function paintTwiceThenReady() {
   render();
   updateHud();
   render();
-  window.__shotReady = true;
-  frozen = true;
+  // __shotReady is set by the RAF loop once it has presented a frame.
 }
 
 // --- screenshot modes ---------------------------------------------------
@@ -559,6 +565,7 @@ window.addEventListener('resize', () => {
 
 if (shotMode) {
   runShot(shotMode);
+  requestAnimationFrame(loop);
 } else {
   hud.showOverlay(
     'EMBERLINE',
