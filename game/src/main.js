@@ -537,7 +537,8 @@ function runShot(name) {
     world.bomb.position.set(-14, 0.11, -10);
     world.bomb.visible = true;
     bots.spawnRound();
-    player.state.position.set(-6, 0, -3);
+    // Camera inside site A (west side, clear of furnace + heat shield) looking at the bomb.
+    player.state.position.set(-17, 0, -8);
     settle(20);
     aimAt(new THREE.Vector3(-14, 0.6, -10));
     hud.setBomb('BOMB A — 0:32');
