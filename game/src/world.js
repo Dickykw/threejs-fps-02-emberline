@@ -3,6 +3,7 @@
 // Everything here is pure math plus three.js meshes, so the sim can run headless.
 import * as THREE from 'three';
 import { PALETTE } from './palette.js';
+import { makeTextures } from './textures.js';
 
 export const SITES = {
   A: { x: -14, z: -10, r: 4.5 },
@@ -96,6 +97,44 @@ export function buildWorld(scene) {
   const colliders = [];
   const mats = new Map();
   const geoCache = new Map();
+  const TEX = makeTextures();
+  const texMats = new Map();
+  // Textured standard material: tile about once per 3 m so a long wall and a
+  // small crate read at the same texel density. Textures are cloned per repeat
+  // (the canvas image itself is shared).
+  function texMat(name, w, h, d = 0) {
+    const rx = Math.max(1, Math.round(Math.max(w, d) / 3));
+    const ry = Math.max(1, Math.round(h / 3));
+    const key = `${name}|${rx}|${ry}`;
+    let m = texMats.get(key);
+    if (!m) {
+      const t = TEX[name].clone();
+      t.needsUpdate = true;
+      t.repeat.set(rx, ry);
+      const metal = name === 'metalPanel';
+      m = new THREE.MeshStandardMaterial({
+        map: t,
+        roughness: metal ? 0.55 : 0.85,
+        metalness: metal ? 0.4 : 0.08,
+      });
+      texMats.set(key, m);
+    }
+    return m;
+  }
+  // Painted surfaces get their texture from their colour, so the existing
+  // layout calls need no changes: walls/metal -> panels, crates -> wood,
+  // containers -> corrugated paint, furnace -> rust.
+  const TEX_BY_COLOR = new Map([
+    [PALETTE.wall, 'metalPanel'],
+    [PALETTE.wallDark, 'metalPanel'],
+    [PALETTE.metal, 'metalPanel'],
+    [PALETTE.metalDark, 'metalPanel'],
+    [PALETTE.crate, 'crateWood'],
+    [PALETTE.containerA, 'containerA'],
+    [PALETTE.containerB, 'containerB'],
+    [PALETTE.containerC, 'containerC'],
+    [PALETTE.furnace, 'rust'],
+  ]);
 
   function mat(color) {
     let m = mats.get(color);
@@ -114,29 +153,32 @@ export function buildWorld(scene) {
     }
     return g;
   }
-  // A solid box: mesh + collider. y is the centre height.
+  // A solid box: mesh + collider. y is the centre height. Textured by colour,
+  // and every box both casts and receives shadows so the yard reads in 3D.
   function box(w, h, d, x, y, z, color, solid = true) {
-    const m = new THREE.Mesh(geo(w, h, d), mat(color));
+    const texName = TEX_BY_COLOR.get(color);
+    const m = new THREE.Mesh(geo(w, h, d), texName ? texMat(texName, w, h, d) : mat(color));
     m.position.set(x, y, z);
+    m.castShadow = true;
+    m.receiveShadow = true;
     scene.add(m);
     if (solid) colliders.push({ x0: x - w / 2, z0: z - d / 2, x1: x + w / 2, z1: z + d / 2, y0: y - h / 2, y1: y + h / 2 });
     return m;
   }
 
-  // Floor (visual only, no collider — the ground plane is y = 0).
+  // Floor (visual only, no collider — the ground plane is y = 0). Textured
+  // concrete slabs; the texture carries the expansion joints, and the floor
+  // receives every shadow in the yard.
+  const floorTex = TEX.floorGrid.clone();
+  floorTex.needsUpdate = true;
+  floorTex.repeat.set(6, 5);
   const floor = new THREE.Mesh(
     new THREE.PlaneGeometry(38.4, 30.4),
-    new THREE.MeshStandardMaterial({ color: PALETTE.floor, roughness: 1 })
+    new THREE.MeshStandardMaterial({ map: floorTex, roughness: 0.95, metalness: 0.02 })
   );
   floor.rotation.x = -Math.PI / 2;
+  floor.receiveShadow = true;
   scene.add(floor);
-  // Floor seams: thin dark strips so the ground reads as poured concrete slabs.
-  for (let i = -3; i <= 3; i++) {
-    const seam = new THREE.Mesh(new THREE.PlaneGeometry(0.08, 30.4), new THREE.MeshBasicMaterial({ color: PALETTE.floorLine }));
-    seam.rotation.x = -Math.PI / 2;
-    seam.position.set(i * 5.4, 0.01, 0);
-    scene.add(seam);
-  }
 
   // Outer walls.
   box(0.4, 5, 30.4, -19.2, 2.5, 0, PALETTE.wallDark);
@@ -183,17 +225,155 @@ export function buildWorld(scene) {
   box(0.4, 4, 4, -8, 2, -4, PALETTE.wall);
   box(0.4, 4, 4, 8, 2, -4, PALETTE.wall);
 
-  // Lighting: dim ambient, a low sun, furnace glow over site A, warm light over site B.
-  scene.add(new THREE.AmbientLight(0x8a6a4a, 0.55));
-  const sun = new THREE.DirectionalLight(0xffe0b0, 0.7);
+  // ---- Dressing: pipes, barrels, vents, trim, lamps, ramp (visual dressing
+  // around the layout — floor props block movement, everything overhead or
+  // stacked is non-solid, so lanes, routes and sightlines are unchanged). ----
+  function cyl(rTop, rBottom, h, x, y, z, material, rotX = 0, rotZ = 0) {
+    const m = new THREE.Mesh(new THREE.CylinderGeometry(rTop, rBottom, h, 20), material);
+    m.position.set(x, y, z);
+    m.rotation.x = rotX;
+    m.rotation.z = rotZ;
+    m.castShadow = true;
+    m.receiveShadow = true;
+    scene.add(m);
+    return m;
+  }
+  const pipeMat = texMat('metalPanel', 4, 4);
+  const rustMat = texMat('rust', 2, 2);
+  // Overhead pipes along both long walls + vertical risers at the corners.
+  cyl(0.22, 0.22, 36, 0, 4.5, -14.9, pipeMat, 0, Math.PI / 2);
+  cyl(0.16, 0.16, 36, 0, 4.5, 14.9, pipeMat, 0, Math.PI / 2);
+  cyl(0.18, 0.18, 5, -18.9, 2.5, -14.9, rustMat);
+  cyl(0.18, 0.18, 5, 18.9, 2.5, -14.9, rustMat);
+  cyl(0.18, 0.18, 5, -18.9, 2.5, 14.9, rustMat);
+  cyl(0.18, 0.18, 5, 18.9, 2.5, 14.9, rustMat);
+  // A fat duct across the boiler, above head height.
+  cyl(0.4, 0.4, 12, 0, 3.6, -2, pipeMat, 0, Math.PI / 2);
+  // Barrels: rusted drums clustered against walls, clear of every lane.
+  // Solid, so they block movement like any other floor prop.
+  function barrel(x, z, material) {
+    const m = cyl(0.42, 0.42, 1.05, x, 0.53, z, material);
+    const rim = new THREE.Mesh(new THREE.CylinderGeometry(0.44, 0.44, 0.08, 20), mat(PALETTE.metalDark));
+    rim.position.set(x, 0.95, z);
+    rim.castShadow = true;
+    scene.add(rim);
+    colliders.push({ x0: x - 0.42, z0: z - 0.42, x1: x + 0.42, z1: z + 0.42, y0: 0, y1: 1.05 });
+    return m;
+  }
+  const barrelMats = [rustMat, texMat('containerB', 1, 1), texMat('containerA', 1, 1)];
+  barrel(-18, -14.3, barrelMats[0]);
+  barrel(-17, -14.5, barrelMats[1]);
+  barrel(18, -14.3, barrelMats[2]);
+  barrel(18, -13.3, barrelMats[0]);
+  barrel(18, 14, barrelMats[1]);
+  barrel(17, 14.5, barrelMats[0]);
+  barrel(-18, 5, barrelMats[2]);
+  barrel(-18, 6, barrelMats[0]);
+  barrel(3.6, -2, barrelMats[1]);
+  // Wall vents high on the outer walls.
+  function vent(x, y, z, ry) {
+    const g = new THREE.Group();
+    const back = new THREE.Mesh(new THREE.BoxGeometry(2.2, 1.1, 0.12), mat(PALETTE.metalDark));
+    back.castShadow = true;
+    back.receiveShadow = true;
+    g.add(back);
+    for (let i = -1; i <= 1; i++) {
+      const slat = new THREE.Mesh(new THREE.BoxGeometry(2.0, 0.14, 0.06), mat(PALETTE.wallDark));
+      slat.position.set(0, i * 0.32, 0.09);
+      g.add(slat);
+    }
+    g.position.set(x, y, z);
+    g.rotation.y = ry;
+    scene.add(g);
+  }
+  vent(-19, 3.8, 0, Math.PI / 2);
+  vent(19, 3.8, 0, -Math.PI / 2);
+  vent(0, 3.8, -15, 0);
+  // Wall trim: a light band near the top of every outer wall.
+  box(0.5, 0.3, 30.4, -19.2, 4.8, 0, PALETTE.accent, false);
+  box(0.5, 0.3, 30.4, 19.2, 4.8, 0, PALETTE.accent, false);
+  box(38.4, 0.3, 0.5, 0, 4.8, -15.2, PALETTE.accent, false);
+  box(38.4, 0.3, 0.5, 0, 4.8, 15.2, PALETTE.accent, false);
+  // Extra crates stacked on the solid ones + one in the south-west corner.
+  box(1.0, 0.9, 1.0, 0, 1.55, 3.5, PALETTE.crate, false);
+  box(0.9, 0.8, 0.9, -4.5, 1.5, 4.5, PALETTE.crate, false);
+  box(0.9, 0.8, 0.9, 4.5, 1.5, 4.5, PALETTE.crate, false);
+  box(1.1, 1.0, 1.1, 11.5, 1.6, -12.5, PALETTE.crate, false);
+  box(1.0, 0.9, 1.0, -18, 0.45, 10, PALETTE.crate, true);
+  // Loading ramp against the south wall (visual only).
+  const ramp = new THREE.Mesh(geo(4, 0.3, 3), texMat('metalPanel', 4, 3));
+  ramp.rotation.x = -0.38;
+  ramp.position.set(12, 0.55, 13.6);
+  ramp.castShadow = true;
+  ramp.receiveShadow = true;
+  scene.add(ramp);
+  // Hazard plate under the furnace + a glowing furnace mouth toward site A.
+  const haz1 = new THREE.Mesh(
+    new THREE.PlaneGeometry(3.8, 2.8),
+    new THREE.MeshStandardMaterial({ map: TEX.hazard, roughness: 0.8 })
+  );
+  haz1.rotation.x = -Math.PI / 2;
+  haz1.rotation.z = 0.4;
+  haz1.position.set(-16, 0.02, -12.5);
+  haz1.receiveShadow = true;
+  scene.add(haz1);
+  const mouth = new THREE.Mesh(
+    new THREE.PlaneGeometry(1.7, 1.1),
+    new THREE.MeshBasicMaterial({ color: PALETTE.furnaceHot })
+  );
+  mouth.position.set(-14.38, 1.3, -12.5);
+  mouth.rotation.y = Math.PI / 2;
+  scene.add(mouth);
+  // Hanging lamps: cord + shade + warm bulb, three of them over the lanes.
+  function lamp(x, z) {
+    const cord = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.02, 0.9, 6), mat(PALETTE.metalDark));
+    cord.position.set(x, 4.55, z);
+    scene.add(cord);
+    const shade = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.32, 0.28, 16), mat(PALETTE.metalDark));
+    shade.position.set(x, 4.05, z);
+    shade.castShadow = true;
+    scene.add(shade);
+    const bulb = new THREE.Mesh(
+      new THREE.SphereGeometry(0.13, 12, 8),
+      new THREE.MeshBasicMaterial({ color: 0xffe6b8 })
+    );
+    bulb.position.set(x, 3.88, z);
+    scene.add(bulb);
+  }
+  lamp(0, 8);
+  lamp(-8, 0);
+  lamp(8, 0);
+
+  // Lighting: bright afternoon sun with shadows, warm ambient, a sky/ground
+  // hemisphere for top-vs-bottom shading contrast, furnace glow over site A,
+  // warm light over site B and a hanging-lamp pool mid-map.
+  scene.add(new THREE.AmbientLight(0xfff2dd, 0.65));
+  scene.add(new THREE.HemisphereLight(0xbfd4e6, 0x8a6f52, 0.4));
+  const sun = new THREE.DirectionalLight(0xfff0d0, 2.4);
   sun.position.set(10, 18, 8);
+  sun.castShadow = true;
+  sun.shadow.mapSize.set(2048, 2048);
+  sun.shadow.camera.left = -24;
+  sun.shadow.camera.right = 24;
+  sun.shadow.camera.top = 24;
+  sun.shadow.camera.bottom = -24;
+  sun.shadow.camera.near = 1;
+  sun.shadow.camera.far = 60;
+  sun.shadow.bias = -0.0004;
+  sun.shadow.normalBias = 0.02;
+  sun.shadow.camera.updateProjectionMatrix();
+  sun.target.position.set(0, 0, 0);
   scene.add(sun);
-  const furnaceLight = new THREE.PointLight(new THREE.Color(PALETTE.furnaceHot), 26, 16, 1.7);
+  scene.add(sun.target);
+  const furnaceLight = new THREE.PointLight(new THREE.Color(PALETTE.furnaceHot), 45, 18, 1.6);
   furnaceLight.position.set(-14, 2.6, -11);
   scene.add(furnaceLight);
-  const siteBLight = new THREE.PointLight(new THREE.Color('#ffd9a0'), 14, 12, 1.8);
+  const siteBLight = new THREE.PointLight(new THREE.Color('#ffd9a0'), 24, 15, 1.7);
   siteBLight.position.set(14, 3.4, -10);
   scene.add(siteBLight);
+  const midLight = new THREE.PointLight(new THREE.Color('#ffe6b8'), 12, 14, 1.8);
+  midLight.position.set(0, 3.8, 8);
+  scene.add(midLight);
 
   // The bomb: a dark case with a blinking red top, hidden until planted.
   const bomb = new THREE.Group();
@@ -202,6 +382,7 @@ export function buildWorld(scene) {
     new THREE.MeshStandardMaterial({ color: 0x222226, roughness: 0.4, metalness: 0.6 })
   );
   caseMesh.position.y = 0.11;
+  caseMesh.castShadow = true;
   bomb.add(caseMesh);
   const blinkMat = new THREE.MeshBasicMaterial({ color: 0xff2222 });
   const blink = new THREE.Mesh(new THREE.SphereGeometry(0.05, 8, 6), blinkMat);

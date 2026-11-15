@@ -25,6 +25,12 @@ const canvas = document.getElementById('game');
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
 renderer.setSize(window.innerWidth, window.innerHeight);
+// Shadows on: the sun draws the yard's depth (PCF soft shadows), and ACES
+// tone mapping keeps the bright sunlit faces from blowing out.
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.0;
 
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(PALETTE.sky);
@@ -405,7 +411,7 @@ function step(dt) {
   }
 
   // Furnace flicker + bomb blink.
-  world.furnaceLight.intensity = 26 + Math.sin(time * 7) * 3 + Math.sin(time * 13.3) * 2;
+  world.furnaceLight.intensity = 45 + Math.sin(time * 7) * 5 + Math.sin(time * 13.3) * 3;
   if (world.bombMesh.visible) {
     const on = Math.sin(time * 6) > 0;
     world.bombBlink.color.setHex(on ? 0xff2222 : 0x550000);

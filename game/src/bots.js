@@ -47,6 +47,10 @@ function makeMesh(team) {
   );
   gun.position.set(0.2, 1.15, 0.3);
   g.add(gun);
+  // Bots cast shadows: body, head, helm, legs and gun all land on the floor.
+  g.traverse((o) => {
+    if (o.isMesh) o.castShadow = true;
+  });
   return g;
 }
 
